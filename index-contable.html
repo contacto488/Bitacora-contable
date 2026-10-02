@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bitácora Contable · TRIBU</title>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:#f1f5f9; color:#1e293b; }
+  input,select,textarea,button { font-family:inherit; }
+  #root { max-width:780px; margin:0 auto; padding:14px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  var firebaseConfig = {
+    apiKey: "AIzaSyAfLfJedvOvcheeIb8hDDabxqUAJ1RNl_k",
+    authDomain: "tribu-contable.firebaseapp.com",
+    databaseURL: "https://tribu-contable-default-rtdb.firebaseio.com",
+    projectId: "tribu-contable",
+    storageBucket: "tribu-contable.firebasestorage.app",
+    messagingSenderId: "234602738572",
+    appId: "1:234602738572:web:2dc8d8f2239feb594399ca9"
+  };
+  firebase.initializeApp(firebaseConfig);
+  var db = firebase.database();
+</script>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ===================== CONSTANTES =====================
+const ADMIN_PWD_DEFAULT = "contable2026";
+const RECOVERY_DEFAULT = "TRIBU-CONTABLE";
+const FRECUENCIAS = ["Diario","Semanal","Quincenal","Mensual","Bimestral","Semestral","Ocasional"];
+const ESTADOS = [
+  {v:"", label:"— sin marcar", color:"#94a3b8", bg:"#f8fafc"},
+  {v:"ok", label:"✅ Completado", color:"#15803d", bg:"#f0fdf4"},
+  {v:"proc", label:"⏳ En proceso", color:"#b45309", bg:"#fffbeb"},
+  {v:"pend", label:"❌ Pendiente", color:"#b91c1c", bg:"#fef2f2"},
+  {v:"na", label:"N/A No aplica", color:"#64748b", bg:"#f1f5f9"}
+];
+function estadoInfo(v){ return ESTADOS.find(function(e){return e.v===(v||"");}) || ESTADOS[0]; }
+const AVATAR_BG = ["#8DC63F","#0ea5e9","#6366f1","#ec4899","#f59e0b","#10b981","#a855f7","#ef4444"];
+const BONO_DEFAULT = { umbralCero:80, umbralPleno:95, capCritico:50, montoBase:{} };
+const SEMAFORO_DEFAULT = { verde:95, amarillo:80 };
+
+// t: {cod, nom, meta, frec, crit?, campo?, nota?}
+function T(cod,nom,meta,frec,crit,campo){ return {cod:cod,nom:nom,meta:meta,frec:frec,crit:!!crit,campo:campo||null,nota:"",peso:1}; }
+
+const CARGOS_DEFAULT = [
+  { id:"cartera", cargo:"Auxiliar de Cartera y Ventas", persona:"Janeth Ramírez", reporta:"Coordinadora Contable y Financiera",
+    tareas:[
+      T("KC-03","Descargue de archivos de plataformas de pago","100%","Diario"),
+      T("KC-02","Elaboración de recibos de caja en sistema (mismo día)","100%","Diario",true,"Recibos elaborados"),
+      T("—","Contabilización de facturas de venta y notas","100%","Diario",false,"Facturas / notas"),
+      T("KC-01","Validación del timbre electrónico DIAN (antes del mediodía)","100%","Diario",true),
+      T("KC-05","Cruce de notas crédito con facturas (5 días hábiles)","≥ 90%","Semanal"),
+      T("KC-06","Revisión y seguimiento cartera B2B","100%","Semanal"),
+      T("KC-07","Revisión y seguimiento cartera B2C","100%","Semanal"),
+      T("KC-04","Informe semanal de recaudos por plataforma (viernes)","100%","Semanal"),
+      T("KC-12","Notas crédito bajo protocolo aprobado","100%","Semanal"),
+      T("—","Elaboración de notas por pagos en plataformas digitales","Mensual","Mensual"),
+      T("KC-09","Cruce de anticipos de clientes con facturas","100%","Mensual"),
+      T("—","Velar por la elaboración de notas crédito del mes","100%","Mensual"),
+      T("KC-08","Reporte de cartera vencida > 30 días (antes del día 5)","100%","Mensual",false,"Clientes vencidos"),
+      T("KC-10","Cuadre facturas emitidas vs. recibos de caja","100% sin diferencias","Mensual"),
+      T("—","Entrega de insumos de ventas para cierre contable","Según calendario","Mensual"),
+      T("KC-11","Elaboración del DSEE en la DIAN (sin devoluciones)","100%","Ocasional",true),
+      T("—","Apoyo en auditorías o requerimientos DIAN","Según necesidad","Ocasional")
+    ]},
+  { id:"nomina", cargo:"Auxiliar de Nómina e Impuestos", persona:"", reporta:"Coordinadora Contable y Financiera",
+    tareas:[
+      T("KN-01","Causación de facturas de compras y gastos (48h)","≥ 95%","Diario"),
+      T("KN-02","Aceptación electrónica DIAN (plazo legal 3 días)","100%","Diario",true),
+      T("KN-10","Registro de egresos a proveedores y terceros","≥ 98%","Diario",false,"Egresos registrados"),
+      T("—","Revisión de alertas DIAN en calendario digital","100%","Diario"),
+      T("—","Conciliación DIAN vs. sistema (facturas de compras)","100%","Diario",true),
+      T("KN-03","Causación de nómina quincenal/mensual","100%","Quincenal"),
+      T("KN-03b","Envío de desprendibles de nómina","100%","Quincenal"),
+      T("KN-10b","Novedades de nómina registradas antes del corte","100%","Quincenal"),
+      T("KN-04","Causación y pago de seguridad social (fechas UGPP)","100%","Mensual",true),
+      T("KN-05","Causación de provisiones de nómina","100%","Mensual"),
+      T("KN-06","Causación de gastos bancarios (4x1000, GMF, comisiones)","100%","Mensual"),
+      T("KN-07","Elaboración de certificados de retención","100%","Mensual",true),
+      T("KN-08","Revisión y conciliación archivo DIAN","100%","Mensual"),
+      T("—","Conciliación de saldos CxP con proveedores","100%","Mensual"),
+      T("KN-09","Checklist de cierre mensual (antes del día 5)","100%","Mensual"),
+      T("—","Archivo digital mensual en Drive","100%","Mensual"),
+      T("—","Rete IVA bimestral (meses pares)","Bimestral","Bimestral")
+    ]},
+  { id:"tesoreria", cargo:"Auxiliar de Tesorería y Proveedores", persona:"Ángela López", reporta:"Coordinadora Contable y Financiera",
+    tareas:[
+      T("KT-01","Recaudos registrados el mismo día","100%","Diario",true),
+      T("KT-03","Cuadre de caja menor sin faltantes","$0 diferencia","Diario",true,"Diferencia caja menor"),
+      T("KT-02","Flujo de caja actualizado y enviado","100%","Diario",true,"Saldo flujo de caja"),
+      T("KT-08","Reporte bancario diario en formato estándar","100%","Diario",true),
+      T("KT-04","Pagos a proveedores antes del vencimiento","≥ 95%","Semanal"),
+      T("KT-05","Cargue bancario sin reprocesos","≥ 98%","Semanal"),
+      T("KT-06","Comprobantes enviados a proveedores en 24h","≥ 90%","Semanal"),
+      T("KT-07","Conciliación bancaria firmada (antes del día 8)","100%","Mensual",true),
+      T("KT-10","Archivo digital de comprobantes por fecha de pago","100%","Mensual"),
+      T("KT-09","Actualización de recibos de caja atrasados 2025","100% según plan","Ocasional")
+    ]},
+  { id:"coordinadora", cargo:"Coordinadora Contable y Financiera", persona:"", reporta:"Gerencia General",
+    tareas:[
+      T("KF-05","Aprobación del flujo de caja diario","≥ 95%","Diario"),
+      T("KCO-01","Supervisión del registro contable diario al día","≥ 98%","Diario"),
+      T("—","Monitoreo de indicadores financieros clave","100%","Diario"),
+      T("KF-02","Informe de cartera entregado cada viernes","100%","Semanal"),
+      T("KF-01","Presupuesto semanal por canal","≤ ±5%","Semanal"),
+      T("KCO-08","Supervisión de pago oportuno de obligaciones","≥ 98%","Semanal"),
+      T("KCO-03","Seguimiento al desempeño del equipo auxiliar","≥ 85%","Mensual"),
+      T("KF-03","Oportunidad de estados financieros (≤3 días)","100%","Mensual"),
+      T("KF-04","Indicadores financieros clave monitoreados","100%","Mensual"),
+      T("KF-06","Pre-cierre contable entregado el día 24","100%","Mensual"),
+      T("KF-07","Cierre del mes anterior (2º martes)","100%","Mensual"),
+      T("KF-08","Reportes financieros periódicos a Gerencia","100%","Mensual"),
+      T("KCO-02","Cierre contable mensual en tiempo","100%","Mensual"),
+      T("KCO-04","Facturación electrónica sin reprocesos","≥ 99%","Mensual"),
+      T("KCO-05","Información contable entregada a Contadora","100%","Mensual"),
+      T("KCO-06","Control de activos fijos actualizado","100%","Mensual"),
+      T("KCO-07","Archivo físico y digital al día","≥ 98%","Mensual"),
+      T("KCO-09","Liquidación SS en fechas UGPP","100%","Mensual"),
+      T("KCO-10","Caja menor sin descuadres","0 descuadres","Mensual"),
+      T("KCO-11","Insumos tributarios listos para Contadora","100%","Mensual"),
+      T("KCO-12","Novedades de nómina supervisadas sin error","≥ 99%","Mensual"),
+      T("KCO-13","Devoluciones de clientes gestionadas","≥ 95%","Mensual"),
+      T("KF-10","Riesgos financieros documentados con plan","≥ 2/semestre","Semestral")
+    ]}
+];
+
+// ===================== HELPERS DE FECHA / PERIODO / CALENDARIO =====================
+function hoyStr(){ var d=new Date(); var off=d.getTimezoneOffset(); return new Date(d.getTime()-off*60000).toISOString().slice(0,10); }
+function dosDig(n){ return (n<10?"0":"")+n; }
+function horaActualHM(){ var d=new Date(); return dosDig(d.getHours())+":"+dosDig(d.getMinutes()); }
+function horarioCfg(config){ var h=(config&&config.horario)||{}; return {inicio:h.inicio||"08:00", fin:h.fin||"18:00"}; }
+function dentroDeHorario(config){ var h=horarioCfg(config); var n=horaActualHM(); return n>=h.inicio && n<=h.fin; }
+function hoyMes(){ return hoyStr().slice(0,7); }
+function nombreMes(ym){ if(!ym) return ""; var p=ym.split("-"); var m=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; return m[parseInt(p[1],10)-1]+" "+p[0]; }
+function initials(n){ if(!n) return "?"; return n.split(" ").map(function(w){return w[0];}).join("").slice(0,2).toUpperCase(); }
+function ultimoDia(ym){ var y=+ym.slice(0,4),m=+ym.slice(5,7); return new Date(y,m,0).getDate(); }
+function mesesRecientes(n){ var arr=[]; var d=new Date(); for(var i=0;i<n;i++){ var dd=new Date(d.getFullYear(),d.getMonth()-i,1); arr.push(dd.toISOString().slice(0,7)); } return arr; }
+function frecKey(frec){ return {"Diario":"diario","Semanal":"semanal","Quincenal":"quincenal","Mensual":"mensual","Bimestral":"bimestral","Semestral":"semestral","Ocasional":"ocasional"}[frec]||"otros"; }
+function bimKey(ym){ var y=+ym.slice(0,4),m=+ym.slice(5,7); return y+"-B"+Math.ceil(m/2); }
+function semKey(ym){ var y=+ym.slice(0,4),m=+ym.slice(5,7); return y+"-S"+(m<=6?1:2); }
+function semanasDeMes(ym){ return Math.ceil(ultimoDia(ym)/7); }
+// Ocurrencias (casillas) de una tarea en el mes: una por cada vez que se debe hacer.
+function ocurrencias(frec, ym, cargoId, config){
+  if(frec==="Diario"){
+    var y=+ym.slice(0,4),m=+ym.slice(5,7),last=ultimoDia(ym),arr=[];
+    for(var d=1; d<=last; d++){
+      if(!esDiaLaboral(ym,d,config)) continue;
+      var f=ym+"-"+(d<10?"0"+d:d);
+      var au=ausenciaDe(cargoId,f,config);
+      arr.push({key:f, label:d, hoy:f===hoyStr(), tipo: au?au.tipo:"normal"});
+    }
+    return arr;
+  }
+  if(frec==="Semanal"){ var a=[]; for(var i=1;i<=4;i++) a.push({key:ym+"_S"+i, label:"S"+i, tipo:"normal"}); return a; }
+  if(frec==="Quincenal") return [{key:ym+"_Q1",label:"Q1"},{key:ym+"_Q2",label:"Q2"}];
+  if(frec==="Bimestral") return [{key:bimKey(ym),label:"Bim"}];
+  if(frec==="Semestral") return [{key:semKey(ym),label:"Sem"}];
+  if(frec==="Ocasional") return [{key:ym,label:"Vez"}];
+  return [{key:ym,label:"Mes"}]; // Mensual
+}
+// Clave de la ocurrencia "actual" según la fecha seleccionada (para valor/obs)
+function slotActualKey(frec, fecha){
+  var ym=fecha.slice(0,7), dia=+fecha.slice(8,10);
+  if(frec==="Diario") return fecha;
+  if(frec==="Semanal") return ym+"_S"+Math.min(4,Math.ceil(dia/7));
+  if(frec==="Quincenal") return ym+"_Q"+(dia<=15?1:2);
+  if(frec==="Bimestral") return bimKey(ym);
+  if(frec==="Semestral") return semKey(ym);
+  return ym;
+}
+function esFinde(y,m,d){ var wd=new Date(y,m-1,d).getDay(); return wd===0||wd===6; }
+function esFestivo(fecha, config){ return !!(config.festivos && config.festivos[fecha]); }
+function esSabadoLaboral(fecha, config){ return !!(config.sabadosLaborales && config.sabadosLaborales[fecha]); }
+// Un día cuenta como laboral si: no es festivo, y (es lunes–viernes) o (es sábado marcado como laboral). Domingo nunca.
+function esDiaLaboral(ym, d, config){
+  var y=+ym.slice(0,4),m=+ym.slice(5,7),wd=new Date(y,m-1,d).getDay();
+  if(wd===0) return false;
+  var f=ym+"-"+(d<10?"0"+d:d);
+  if(esFestivo(f,config)) return false;
+  if(wd>=1 && wd<=5) return true;
+  if(wd===6) return esSabadoLaboral(f,config);
+  return false;
+}
+function ausenciaDe(cargoId, fecha, config){ return (config.ausencias && config.ausencias[cargoId] && config.ausencias[cargoId][fecha]) || null; }
+// Días hábiles contables: Lun–Vie, sin festivos, SIN injustificadas (las justificadas SÍ cuentan, a medio valor).
+function diasHabiles(ym, cargoId, config){ return ocurrencias("Diario",ym,cargoId,config).filter(function(o){return o.tipo!=="injustificada";}).length; }
+function diasInjustificados(ym, cargoId, config){
+  var last=ultimoDia(ym),n=0;
+  for(var d=1; d<=last; d++){
+    if(!esDiaLaboral(ym,d,config)) continue;
+    var fecha=ym+"-"+(d<10?"0"+d:d);
+    var au=ausenciaDe(cargoId,fecha,config);
+    if(au && au.tipo==="injustificada") n++;
+  }
+  return n;
+}
+// Días laborales del mes (Lun–Vie + sábados marcados, menos festivos). Base estable para el valor de un día.
+function diasLaboralesMes(ym, config){
+  var last=ultimoDia(ym),n=0;
+  for(var d=1; d<=last; d++){ if(esDiaLaboral(ym,d,config)) n++; }
+  return n;
+}
+
+// ===================== CÁLCULO DE CUMPLIMIENTO (por periodos) =====================
+function tareaPct(t, regCargo, ym, config, cargoId){
+  var fk=frecKey(t.frec); var reg=regCargo[fk]||{};
+  var ocs=ocurrencias(t.frec, ym, cargoId, config);
+  if(t.frec==="Diario"){
+    var cred=0, total=0, hechos=0;
+    ocs.forEach(function(o){
+      if(o.tipo==="injustificada") return;           // no cuenta en el avance
+      total++;
+      if(o.tipo==="justificada"){ cred+=0.5; }        // justificada = medio crédito automático
+      else { if(reg[o.key] && reg[o.key][t.cod] && reg[o.key][t.cod].done){ cred+=1; hechos++; } }
+    });
+    return { pct: total>0?Math.round(cred/total*100):0, hechos:hechos, base:total, aplica:true, baseTxt:hechos+"/"+total+" días", ocs:ocs, fk:fk };
+  }
+  var total=ocs.length, hechos=0;
+  ocs.forEach(function(o){ if(reg[o.key] && reg[o.key][t.cod] && reg[o.key][t.cod].done) hechos++; });
+  var aplica=true;
+  if((t.frec==="Bimestral"||t.frec==="Semestral"||t.frec==="Ocasional") && hechos===0) aplica=false;
+  var unidad = t.frec==="Semanal"?" semanas":t.frec==="Quincenal"?" quincenas":"";
+  return { pct: total>0?Math.round(hechos/total*100):0, hechos:hechos, base:total, aplica:aplica, baseTxt:hechos+"/"+total+unidad, ocs:ocs, fk:fk };
+}
+function calcCumplimientoMes(cargo, regCargo, ym, config){
+  regCargo=regCargo||{};
+  var sumaPeso=0, sumaHecho=0, criticoRojo=false, nAplic=0;
+  cargo.tareas.forEach(function(t){
+    var r=tareaPct(t, regCargo, ym, config, cargo.id);
+    if(!r.aplica) return;
+    var peso=t.peso||1; sumaPeso+=peso; sumaHecho+=peso*r.pct/100; nAplic++;
+    if(t.crit && r.pct<100) criticoRojo=true;
+  });
+  return { pct: sumaPeso>0?Math.round(sumaHecho/sumaPeso*100):0, criticoRojo:criticoRojo, dh:diasHabiles(ym,cargo.id,config), injust:diasInjustificados(ym,cargo.id,config), nAplic:nAplic };
+}
+function colorSemaforo(pct, sem){
+  if(pct>=sem.verde) return {e:"🟢",c:"#15803d",bg:"#dcfce7",txt:"Verde"};
+  if(pct>=sem.amarillo) return {e:"🟡",c:"#b45309",bg:"#fef9c3",txt:"Amarillo"};
+  return {e:"🔴",c:"#b91c1c",bg:"#fee2e2",txt:"Rojo"};
+}
+function calcBono(pct, criticoRojo, bono){
+  var b;
+  if(pct<=bono.umbralCero) b=0;
+  else if(pct>=bono.umbralPleno) b=100;
+  else b=Math.round((pct-bono.umbralCero)/(bono.umbralPleno-bono.umbralCero)*100);
+  if(criticoRojo) b=Math.min(b, bono.capCritico);
+  return b;
+}
+function fmtCOP(n){ if(n===null||n===undefined||isNaN(n)) return "—"; return "$"+Math.round(n).toLocaleString("es-CO"); }
+
+// ===================== APP =====================
+function App(){
+  var [config,setConfig]=useState(null);
+  var [registros,setRegistros]=useState({});
+  var [cierres,setCierres]=useState({});
+  var [ready,setReady]=useState(false);
+  var [vista,setVista]=useState("login");
+  var [cargoActivo,setCargoActivo]=useState(null);
+  var [adminOk,setAdminOk]=useState(false);
+  var [bitAdmin,setBitAdmin]=useState(false);
+
+  useEffect(function(){
+    var defc={cargos:CARGOS_DEFAULT, bono:BONO_DEFAULT, semaforo:SEMAFORO_DEFAULT, passwords:{}, festivos:{}, ausencias:{}, sabadosLaborales:{}, recoveryCode:RECOVERY_DEFAULT, horario:{inicio:"08:00",fin:"18:00"}};
+    var rc=db.ref("config"); rc.on("value",function(s){ var v=s.val(); if(!v){ try{db.ref("config").set(defc);}catch(e){} setConfig(defc);} else setConfig(v); setReady(true); });
+    var rr=db.ref("registros"); rr.on("value",function(s){ setRegistros(s.val()||{}); });
+    var rx=db.ref("cierres"); rx.on("value",function(s){ setCierres(s.val()||{}); });
+    var to=setTimeout(function(){setReady(true);},6000);
+    return function(){ rc.off(); rr.off(); rx.off(); clearTimeout(to); };
+  },[]);
+
+  if(!ready || !config) return <div style={{textAlign:"center",padding:"80px 20px",color:"#64748b"}}>Cargando Bitácora Contable…</div>;
+  var cfg=Object.assign({cargos:CARGOS_DEFAULT,bono:BONO_DEFAULT,semaforo:SEMAFORO_DEFAULT,passwords:{},festivos:{},ausencias:{},sabadosLaborales:{},recoveryCode:RECOVERY_DEFAULT,horario:{inicio:"08:00",fin:"18:00"}}, config);
+  if(!cfg.bono) cfg.bono=BONO_DEFAULT; if(!cfg.semaforo) cfg.semaforo=SEMAFORO_DEFAULT; if(!cfg.cargos) cfg.cargos=CARGOS_DEFAULT; if(!cfg.festivos) cfg.festivos={}; if(!cfg.ausencias) cfg.ausencias={};
+
+  function guardarConfig(nc){ db.ref("config").set(nc); }
+  function guardarSlot(cargoId, fk, slot, mapa){ db.ref("registros/"+cargoId+"/"+fk+"/"+slot).set(mapa); }
+  function guardarCierre(ym,cargoId,obj){ db.ref("cierres/"+ym+"/"+cargoId).set(obj); }
+
+  if(vista==="admin"){
+    if(!adminOk) return <AdminLock pwd={(cfg.passwords&&cfg.passwords.__admin__)||ADMIN_PWD_DEFAULT} recoveryCode={cfg.recoveryCode||RECOVERY_DEFAULT} onResetPwd={function(np){ var npw=Object.assign({},cfg.passwords||{}); npw.__admin__=np; guardarConfig(Object.assign({},cfg,{passwords:npw})); }} onOk={function(){setAdminOk(true);}} onBack={function(){setVista("login");}}/>;
+    return <Admin config={cfg} registros={registros} cierres={cierres} guardarConfig={guardarConfig} guardarCierre={guardarCierre} onCorregir={function(c){ setCargoActivo(c); setBitAdmin(true); setVista("bitacora"); }} onBack={function(){setVista("login");setAdminOk(false);}}/>;
+  }
+  if(vista==="bitacora" && cargoActivo){
+    return <Bitacora cargo={cargoActivo} config={cfg} registros={registros} cierres={cierres} guardarSlot={guardarSlot} guardarCierre={guardarCierre} esAdmin={bitAdmin} onBack={function(){ if(bitAdmin){ setBitAdmin(false); setVista("admin"); } else { setVista("login"); } setCargoActivo(null); }}/>;
+  }
+  return <Login config={cfg} onSelect={function(c){setCargoActivo(c);setVista("bitacora");}} onAdmin={function(){setVista("admin");}}/>;
+}
+
+// ===================== LOGIN =====================
+function Login(props){
+  var cfg=props.config;
+  var [sel,setSel]=useState(null); var [pw,setPw]=useState(""); var [err,setErr]=useState(false);
+  function clic(c){ var clave=(cfg.passwords&&cfg.passwords[c.id])||""; if(clave){ setSel(c); setPw(""); setErr(false); } else { props.onSelect(c); } }
+  function entrar(){ var clave=(cfg.passwords&&cfg.passwords[sel.id])||""; if(pw===clave){ props.onSelect(sel); } else { setErr(true); } }
+  if(sel){
+    return (
+      <div style={{maxWidth:340,margin:"60px auto",textAlign:"center"}}>
+        <div style={{width:54,height:54,borderRadius:14,background:"#8DC63F",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:20,margin:"0 auto 10px"}}>{initials(sel.persona||sel.cargo)}</div>
+        <div style={{fontWeight:800,fontSize:16}}>{sel.persona}</div>
+        <div style={{fontSize:12,color:"#64748b",marginBottom:14}}>{sel.cargo}</div>
+        <input type="password" value={pw} onChange={function(e){setPw(e.target.value);setErr(false);}} onKeyDown={function(e){if(e.key==="Enter")entrar();}} placeholder="Tu contraseña" autoFocus style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:"1.5px solid "+(err?"#ef4444":"#e2e8f0"),fontSize:14,marginBottom:10}}/>
+        {err && <div style={{color:"#ef4444",fontSize:12,marginBottom:8}}>Contraseña incorrecta</div>}
+        <button onClick={entrar} style={{width:"100%",padding:"10px",borderRadius:10,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,cursor:"pointer",marginBottom:8}}>Entrar</button>
+        <button onClick={function(){setSel(null);}} style={{width:"100%",padding:"9px",borderRadius:10,border:"1.5px solid #e2e8f0",background:"#fff",color:"#64748b",fontWeight:700,cursor:"pointer"}}>← Volver</button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{textAlign:"center",padding:"18px 10px 6px"}}>
+        <div style={{display:"inline-flex",alignItems:"center",gap:10}}>
+          <div style={{width:44,height:44,borderRadius:12,background:"#8DC63F",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🧾</div>
+          <div style={{textAlign:"left"}}>
+            <div style={{fontSize:20,fontWeight:900,color:"#1a2e0a",lineHeight:1}}>Bitácora Contable</div>
+            <div style={{fontSize:12,color:"#64748b"}}>Área Contable y Financiera · ASPM SAS</div>
+          </div>
+        </div>
+      </div>
+      <div style={{fontSize:14,color:"#64748b",textAlign:"center",marginBottom:14}}>¿Quién eres?</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
+        {cfg.cargos.map(function(c,i){
+          var sp=!c.persona; var tienePw=!!(cfg.passwords&&cfg.passwords[c.id]);
+          return (
+            <button key={c.id} onClick={function(){ if(!sp) clic(c); }} disabled={sp}
+              style={{textAlign:"left",padding:16,borderRadius:16,border:"2px solid #e2e8f0",background:sp?"#f8fafc":"#fff",cursor:sp?"not-allowed":"pointer",opacity:sp?0.7:1,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <div style={{width:40,height:40,borderRadius:11,background:AVATAR_BG[i%AVATAR_BG.length],display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800}}>{initials(c.persona||c.cargo)}</div>
+                <div style={{fontWeight:800,fontSize:14,color:"#1e293b"}}>{c.persona||"(Sin asignar)"} {tienePw && <span style={{fontSize:11}}>🔒</span>}</div>
+              </div>
+              <div style={{fontSize:12,color:"#475569",fontWeight:600}}>{c.cargo}</div>
+              <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{c.tareas.length} tareas</div>
+              {sp && <div style={{fontSize:10,color:"#b91c1c",fontWeight:700,marginTop:6}}>Pendiente de asignar responsable</div>}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{textAlign:"center",marginTop:22}}>
+        <button onClick={props.onAdmin} style={{padding:"9px 18px",borderRadius:10,border:"1.5px solid #e2e8f0",background:"#fff",color:"#64748b",fontWeight:700,fontSize:13,cursor:"pointer"}}>⚙️ Administración</button>
+      </div>
+    </div>
+  );
+}
+
+// ===================== BITÁCORA (colaborador) — modelo por periodos =====================
+function Bitacora(props){
+  var cargo=props.cargo, cfg=props.config;
+  var esAdmin=!!props.esAdmin;
+  var [fecha,setFecha]=useState(hoyStr());
+  var ym=fecha.slice(0,7);
+  var reg=(props.registros[cargo.id])||{};
+  var cierre=(props.cierres[ym] && props.cierres[ym][cargo.id])||null;
+  var bloqueado=cierre && cierre.bloqueado;
+  var hora=horarioCfg(cfg); var horaOk=dentroDeHorario(cfg);
+  // ¿se puede marcar esta casilla? Admin: cualquier día. Auxiliar: solo la ocurrencia actual (hoy / periodo actual) y dentro del horario.
+  function editable(o, frec){
+    if(bloqueado) return false;
+    if(esAdmin) return true;
+    if(!horaOk) return false;
+    if(frec==="Diario") return !!o.hoy;
+    return o.key===slotActualKey(frec, hoyStr());
+  }
+
+  var res=calcCumplimientoMes(cargo, reg, ym, cfg);
+  var sem=colorSemaforo(res.pct, cfg.semaforo);
+  var msg = res.pct>=cfg.semaforo.verde ? "¡Excelente! Vas por encima de la meta 🎉" :
+            res.pct>=cfg.semaforo.amarillo ? "¡Vas bien! Un último empujón 💪" :
+            res.pct>0 ? "Vas avanzando, sigue marcando tus tareas 👍" : "Empieza a marcar tus tareas";
+
+  var au=ausenciaDe(cargo.id, fecha, cfg);
+  var festivo=esFestivo(fecha, cfg);
+
+  // guardar cualquier ocurrencia (casilla) de cualquier frecuencia
+  function setDato(fk, key, cod, campo, val){
+    if(bloqueado) return;
+    var slotMap=Object.assign({}, (reg[fk]&&reg[fk][key])||{});
+    slotMap[cod]=Object.assign({}, slotMap[cod]||{}); slotMap[cod][campo]=val;
+    props.guardarSlot(cargo.id, fk, key, slotMap);
+  }
+
+  var porFrec={}; cargo.tareas.forEach(function(t){ (porFrec[t.frec]=porFrec[t.frec]||[]).push(t); });
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+        <button onClick={props.onBack} style={{padding:"7px 12px",borderRadius:9,border:"1.5px solid #e2e8f0",background:"#fff",cursor:"pointer",fontWeight:700,color:"#64748b"}}>← Salir</button>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:900,fontSize:16,color:"#1a2e0a"}}>{cargo.persona||cargo.cargo}</div>
+          <div style={{fontSize:12,color:"#64748b"}}>{cargo.cargo}</div>
+        </div>
+        <input type="date" value={fecha} onChange={function(e){setFecha(e.target.value||hoyStr());}} style={{padding:"6px 8px",borderRadius:9,border:"1.5px solid #e2e8f0",fontWeight:700,fontSize:12}}/>
+      </div>
+
+      {/* Barra Mi avance */}
+      <div style={{background:"#fff",borderRadius:16,border:"1px solid #e2e8f0",padding:16,marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#1e293b"}}>💪 Mi avance de {nombreMes(ym)}</div>
+          <div style={{fontSize:22,fontWeight:900,color:sem.c}}>{res.pct}%</div>
+        </div>
+        <div style={{height:16,borderRadius:20,background:"#f1f5f9",overflow:"hidden"}}>
+          <div style={{height:"100%",width:res.pct+"%",borderRadius:20,background:sem.c,transition:"width .4s"}}></div>
+        </div>
+        <div style={{fontSize:12,color:sem.c,fontWeight:700,marginTop:8}}>{sem.e} {msg}</div>
+        <div style={{fontSize:11,color:"#64748b",marginTop:3}}>Días hábiles del mes: {res.dh}{res.injust>0?" · ⚠ "+res.injust+" falta(s) injustificada(s)":""}</div>
+        <div style={{fontSize:10.5,color:"#94a3b8",marginTop:8,lineHeight:1.4,background:"#f8fafc",borderRadius:8,padding:"6px 9px"}}>ⓘ Este avance es una guía. El cumplimiento final para la bonificación lo valida tu líder al cierre del mes y está sujeto a ajustes.</div>
+      </div>
+
+      {bloqueado && (
+        <div style={{background:"#f8fafc",border:"1.5px solid #cbd5e1",borderRadius:12,padding:14,marginBottom:12}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#1e293b",marginBottom:4}}>🔒 Mes cerrado y validado</div>
+          <div style={{fontSize:12,color:"#475569",marginBottom:10}}>Cumplimiento validado por tu líder: <b>{cierre.cumplValidado!==undefined?cierre.cumplValidado:res.pct}%</b>{cierre.bono!==undefined?<span> · Bono: <b>{fmtCOP(cierre.bono)}</b></span>:null}. Ya no se puede modificar.</div>
+          {cierre.aceptado
+            ? <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",color:"#15803d",borderRadius:9,padding:"8px 11px",fontSize:12,fontWeight:700}}>✓ Aceptado el {(cierre.aceptado.fecha||"").slice(0,10)}</div>
+            : <button onClick={function(){ props.guardarCierre(ym, cargo.id, Object.assign({}, cierre, {aceptado:{fecha:new Date().toISOString()}})); }} style={{width:"100%",padding:"10px",borderRadius:9,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer"}}>✍️ Acepto mi cumplimiento y bono</button>}
+        </div>
+      )}
+      {festivo && <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",borderRadius:10,padding:"8px 12px",fontSize:12,fontWeight:700,marginBottom:12}}>📅 {fecha}: día festivo (no laboral).</div>}
+      {au && <div style={{background:au.tipo==="justificada"?"#f0fdf4":"#fef2f2",border:"1px solid "+(au.tipo==="justificada"?"#bbf7d0":"#fecaca"),color:au.tipo==="justificada"?"#15803d":"#b91c1c",borderRadius:10,padding:"8px 12px",fontSize:12,fontWeight:700,marginBottom:12}}>🏥 {fecha}: ausencia {au.tipo}{au.motivo?" — "+au.motivo:""}.</div>}
+
+      {esAdmin
+        ? <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",borderRadius:10,padding:"8px 12px",fontSize:12,fontWeight:700,marginBottom:12}}>✏️ Modo administrador — puedes corregir cualquier día y cualquier casilla.</div>
+        : (horaOk
+            ? <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",color:"#15803d",borderRadius:10,padding:"8px 12px",fontSize:12,fontWeight:700,marginBottom:12}}>🕐 Horario de marcación abierto ({hora.inicio}–{hora.fin}). Marca las tareas de hoy; solo puedes marcar el día actual.</div>
+            : <div style={{background:"#fffbeb",border:"1px solid #fde68a",color:"#b45309",borderRadius:10,padding:"8px 12px",fontSize:12,fontWeight:700,marginBottom:12}}>🕐 Fuera del horario de marcación ({hora.inicio}–{hora.fin}). Lo que no se marcó queda como no realizado. Si hubo un error, avisa al administrador para corregirlo.</div>)}
+
+      {/* TAREAS CON CASILLAS (una por cada vez que se hace en el mes) */}
+      {FRECUENCIAS.filter(function(f){return porFrec[f];}).map(function(f){
+        var emoji = f==="Diario"?"📅":"📆";
+        var sub = f==="Diario"?"una casilla por día hábil":f==="Semanal"?"4 veces en el mes":f==="Quincenal"?"2 veces en el mes":"1 vez";
+        return (
+          <div key={f} style={{marginBottom:14}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#475569",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:6}}>{emoji} {f} <span style={{color:"#94a3b8",fontWeight:600}}>· {sub}, marca cada vez que la hagas</span></div>
+            <div style={{display:"flex",flexDirection:"column",gap:7}}>
+              {porFrec[f].map(function(t){
+                var r=tareaPct(t,reg,ym,cfg,cargo.id);
+                var slotK=slotActualKey(f,fecha);
+                var st=((reg[r.fk]&&reg[r.fk][slotK])||{})[t.cod]||{};
+                var pct=r.pct;
+                return (
+                  <div key={t.cod+t.nom} style={{background:"#fff",border:"1.5px solid "+(pct>=100?"#86efac":"#e2e8f0"),borderRadius:12,padding:"10px 12px"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#1e293b"}}>
+                      {t.cod!=="—" && <span style={{fontSize:10,fontWeight:800,color:"#64748b",marginRight:6}}>{t.cod}</span>}
+                      {t.nom}
+                      {t.crit && <span style={{fontSize:9,fontWeight:800,background:"#fee2e2",color:"#b91c1c",borderRadius:20,padding:"1px 6px",marginLeft:6}}>⚠ CRÍTICO</span>}
+                    </div>
+                    <div style={{fontSize:11,color:"#94a3b8",margin:"3px 0 6px"}}>Meta: {t.meta} · {r.baseTxt} ({pct}%)</div>
+                    <div style={{height:7,borderRadius:20,background:"#f1f5f9",overflow:"hidden",marginBottom:8}}><div style={{height:"100%",width:pct+"%",background:pct>=100?"#16a34a":pct>=50?"#f59e0b":"#8DC63F",transition:"width .3s"}}></div></div>
+                    {t.nota && <div style={{marginBottom:8,background:"#eff6ff",borderRadius:8,padding:"6px 9px",fontSize:11.5,color:"#1e40af",fontWeight:600}}>📌 {t.nota}</div>}
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                      {r.ocs.map(function(o){
+                        var done=reg[r.fk]&&reg[r.fk][o.key]&&reg[r.fk][o.key][t.cod]&&reg[r.fk][o.key][t.cod].done;
+                        var esHoy=!!o.hoy;
+                        var ancho = f==="Diario"?32 : (f==="Semanal"||f==="Quincenal")?48 : 110;
+                        if(o.tipo==="injustificada"){
+                          return <button key={o.key} disabled title={o.key+" · falta injustificada (no cuenta)"} style={{minWidth:ancho,height:30,borderRadius:7,border:"2px solid #ef4444",background:"#fee2e2",color:"#b91c1c",fontWeight:800,fontSize:11,cursor:"not-allowed",padding:"0 5px"}}>✗ {o.label}</button>;
+                        }
+                        if(o.tipo==="justificada"){
+                          return <button key={o.key} disabled title={o.key+" · ausencia justificada (cuenta medio)"} style={{minWidth:ancho,height:30,borderRadius:7,border:"2px solid #3b82f6",background:"#dbeafe",color:"#1d4ed8",fontWeight:800,fontSize:11,cursor:"not-allowed",padding:"0 5px"}}>½ {o.label}</button>;
+                        }
+                        var puede=editable(o,f);
+                        return <button key={o.key} onClick={function(){ if(puede) setDato(r.fk,o.key,t.cod,"done",!done); }} disabled={!puede} title={o.key+(puede?"":" · solo lectura")}
+                          style={{minWidth:ancho,height:30,borderRadius:7,border:"2px solid "+(done?"#16a34a":(puede&&esHoy)?"#3b82f6":"#cbd5e1"),background:done?"#16a34a":(puede&&esHoy)?"#eff6ff":(puede?"#fff":"#f8fafc"),color:done?"#fff":(puede&&esHoy)?"#1d4ed8":(puede?"#64748b":"#cbd5e1"),opacity:(!puede&&!done)?0.75:1,fontWeight:800,fontSize:11,cursor:puede?"pointer":"not-allowed",padding:"0 5px"}}>
+                          {done?"✓ ":""}{o.label}
+                        </button>;
+                      })}
+                    </div>
+                    {t.campo && <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}><span style={{fontSize:11,fontWeight:700,color:"#64748b"}}>{t.campo}:</span><input value={st.valor||""} disabled={bloqueado || (!esAdmin && !horaOk)} onChange={function(e){setDato(r.fk,slotK,t.cod,"valor",e.target.value);}} placeholder="—" style={{flex:1,padding:"5px 8px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:13,fontWeight:700}}/></div>}
+                    <input value={st.obs||""} disabled={bloqueado || (!esAdmin && !horaOk)} onChange={function(e){setDato(r.fk,slotK,t.cod,"obs",e.target.value);}} placeholder="Observaciones del periodo actual…" style={{width:"100%",boxSizing:"border-box",marginTop:7,padding:"5px 8px",borderRadius:7,border:"1px solid #eef2f6",fontSize:12}}/>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ===================== ADMIN =====================
+function AdminLock(props){
+  var [p,setP]=useState(""); var [err,setErr]=useState(false);
+  var [modo,setModo]=useState("login"); // login | recuperar
+  var [code,setCode]=useState(""); var [np1,setNp1]=useState(""); var [msg,setMsg]=useState("");
+  function go(){ if(p===props.pwd) props.onOk(); else setErr(true); }
+  function recuperar(){
+    if(code!==props.recoveryCode){ setMsg("Código de recuperación incorrecto"); return; }
+    if(!np1 || np1.length<4){ setMsg("La nueva contraseña debe tener al menos 4 caracteres"); return; }
+    props.onResetPwd(np1); setMsg(""); setModo("login"); setP(np1); alert("Contraseña actualizada. Ya puedes entrar.");
+  }
+  if(modo==="recuperar"){
+    return (
+      <div style={{maxWidth:360,margin:"50px auto",textAlign:"center"}}>
+        <div style={{fontSize:30,marginBottom:8}}>🔑</div>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:6}}>Recuperar contraseña</div>
+        <div style={{fontSize:12,color:"#64748b",marginBottom:14}}>Ingresa tu código de recuperación y define una nueva contraseña.</div>
+        <input value={code} onChange={function(e){setCode(e.target.value);setMsg("");}} placeholder="Código de recuperación" style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:14,marginBottom:8}}/>
+        <input type="password" value={np1} onChange={function(e){setNp1(e.target.value);setMsg("");}} placeholder="Nueva contraseña" style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:"1.5px solid #e2e8f0",fontSize:14,marginBottom:10}}/>
+        {msg && <div style={{color:"#ef4444",fontSize:12,marginBottom:8}}>{msg}</div>}
+        <button onClick={recuperar} style={{width:"100%",padding:"10px",borderRadius:10,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,cursor:"pointer",marginBottom:8}}>Cambiar contraseña</button>
+        <button onClick={function(){setModo("login");setMsg("");}} style={{width:"100%",padding:"9px",borderRadius:10,border:"1.5px solid #e2e8f0",background:"#fff",color:"#64748b",fontWeight:700,cursor:"pointer"}}>← Volver</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{maxWidth:340,margin:"60px auto",textAlign:"center"}}>
+      <div style={{fontSize:30,marginBottom:8}}>🔒</div>
+      <div style={{fontWeight:800,fontSize:16,marginBottom:14}}>Acceso administración</div>
+      <input type="password" value={p} onChange={function(e){setP(e.target.value);setErr(false);}} onKeyDown={function(e){if(e.key==="Enter")go();}} placeholder="Contraseña" style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,border:"1.5px solid "+(err?"#ef4444":"#e2e8f0"),fontSize:14,marginBottom:10}}/>
+      {err && <div style={{color:"#ef4444",fontSize:12,marginBottom:8}}>Contraseña incorrecta</div>}
+      <button onClick={go} style={{width:"100%",padding:"10px",borderRadius:10,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,cursor:"pointer",marginBottom:8}}>Entrar</button>
+      <button onClick={function(){setModo("recuperar");}} style={{width:"100%",padding:"7px",borderRadius:10,border:"none",background:"transparent",color:"#0369a1",fontWeight:700,fontSize:12,cursor:"pointer",marginBottom:8}}>¿Olvidaste la contraseña?</button>
+      <button onClick={props.onBack} style={{width:"100%",padding:"9px",borderRadius:10,border:"1.5px solid #e2e8f0",background:"#fff",color:"#64748b",fontWeight:700,cursor:"pointer"}}>← Volver</button>
+    </div>
+  );
+}
+
+function Admin(props){
+  var cfg=props.config;
+  var [tab,setTab]=useState("bono");
+  function tb(id,label){ return <button onClick={function(){setTab(id);}} style={{padding:"8px 11px",borderRadius:9,border:"none",background:tab===id?"#8DC63F":"transparent",color:tab===id?"#fff":"#64748b",fontWeight:700,fontSize:12.5,cursor:"pointer"}}>{label}</button>; }
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+        <button onClick={props.onBack} style={{padding:"7px 12px",borderRadius:9,border:"1.5px solid #e2e8f0",background:"#fff",cursor:"pointer",fontWeight:700,color:"#64748b"}}>← Salir</button>
+        <div style={{fontWeight:900,fontSize:16,color:"#1a2e0a"}}>⚙️ Administración</div>
+      </div>
+      <div style={{display:"flex",gap:3,flexWrap:"wrap",background:"#fff",borderRadius:12,padding:6,marginBottom:14,border:"1px solid #e2e8f0"}}>
+        {tb("bono","💰 Bonificación")}
+        {tb("corregir","✏️ Corregir")}
+        {tb("cal","📅 Calendario")}
+        {tb("cargos","👥 Cargos")}
+        {tb("tareas","📋 Tareas/KPIs")}
+        {tb("config","🎛️ Reglas")}
+      </div>
+      {tab==="bono" && <PanelBono config={cfg} registros={props.registros} cierres={props.cierres} guardarCierre={props.guardarCierre} guardar={props.guardarConfig}/>}
+      {tab==="corregir" && <PanelCorregir config={cfg} onCorregir={props.onCorregir}/>}
+      {tab==="cal" && <PanelCalendario config={cfg} guardar={props.guardarConfig}/>}
+      {tab==="cargos" && <PanelCargos config={cfg} guardar={props.guardarConfig}/>}
+      {tab==="tareas" && <PanelTareas config={cfg} guardar={props.guardarConfig}/>}
+      {tab==="config" && <PanelConfig config={cfg} guardar={props.guardarConfig}/>}
+    </div>
+  );
+}
+
+// ---- Panel Corregir (abrir bitácora como admin) ----
+function PanelCorregir(props){
+  var cfg=props.config;
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+      <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"9px 12px",fontSize:11.5,color:"#1d4ed8",lineHeight:1.4}}>✏️ Abre la bitácora de una persona en <b>modo administrador</b> para corregir días pasados: puedes marcar o desmarcar cualquier casilla de cualquier fecha, sin límite de horario. Usa el selector de fecha para ir al día que necesites.</div>
+      {cfg.cargos.map(function(c){
+        var sp=!c.persona;
+        return (
+          <div key={c.id} style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:12,display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:800}}>{c.persona||"(Sin asignar)"}</div>
+              <div style={{fontSize:11,color:"#64748b"}}>{c.cargo}</div>
+            </div>
+            <button onClick={function(){ props.onCorregir(c); }} disabled={sp} style={{padding:"8px 14px",borderRadius:9,border:"none",background:sp?"#e2e8f0":"#8DC63F",color:sp?"#94a3b8":"#fff",fontWeight:800,fontSize:12,cursor:sp?"not-allowed":"pointer"}}>Abrir bitácora</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---- Panel Bonificación ----
+function PanelBono(props){
+  var cfg=props.config; var [ym,setYm]=useState(hoyMes());
+  function setCierre(cid,obj){ var prev=(props.cierres[ym]&&props.cierres[ym][cid])||{}; props.guardarCierre(ym,cid,Object.assign({},prev,obj)); }
+  function setMontoBase(cid,val){ var nb=Object.assign({},cfg.bono.montoBase||{}); nb[cid]=Number(val)||0; props.guardar(Object.assign({},cfg,{bono:Object.assign({},cfg.bono,{montoBase:nb})})); }
+  var filas=cfg.cargos.map(function(c){
+    var reg=props.registros[c.id]||{};
+    var res=calcCumplimientoMes(c,reg,ym,cfg);
+    var ci=(props.cierres[ym]&&props.cierres[ym][c.id])||{};
+    var cumplVal=(ci.cumplValidado!==undefined&&ci.cumplValidado!==null&&ci.cumplValidado!=="")?Number(ci.cumplValidado):res.pct;
+    var criticosOk=(ci.criticosOk!==undefined)?!!ci.criticosOk:!res.criticoRojo;
+    var bonoPct=calcBono(cumplVal,!criticosOk,cfg.bono);
+    var base=(cfg.bono.montoBase&&cfg.bono.montoBase[c.id])||0;
+    var bonoBruto=base*bonoPct/100;
+    var diasLab = diasLaboralesMes(ym, cfg);
+    var descSugerido = diasLab>0 ? Math.round(base/diasLab*res.injust) : 0; // valor de 1 día del monto base (no cambia con el tope)
+    var desc = (ci.descuento!==undefined&&ci.descuento!=="")?Number(ci.descuento):descSugerido;
+    var bonoFinal=Math.max(0, bonoBruto-desc);
+    return {c:c,res:res,ci:ci,cumplVal:cumplVal,criticosOk:criticosOk,bonoPct:bonoPct,base:base,desc:desc,descSugerido:descSugerido,bonoFinal:bonoFinal};
+  });
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+        <span style={{fontWeight:700,fontSize:13,color:"#475569"}}>Período:</span>
+        <select value={ym} onChange={function(e){setYm(e.target.value);}} style={{padding:"7px 9px",borderRadius:9,border:"1.5px solid #e2e8f0",fontWeight:700,fontSize:13}}>{mesesRecientes(12).map(function(m){return <option key={m} value={m}>{nombreMes(m)}</option>;})}</select>
+        <button onClick={function(){exportarExcel(cfg,props.registros,props.cierres,ym);}} style={{marginLeft:"auto",padding:"8px 14px",borderRadius:9,border:"none",background:"#10b981",color:"#fff",fontWeight:800,fontSize:13,cursor:"pointer"}}>⬇️ Exportar Excel</button>
+      </div>
+      <div style={{fontSize:11,color:"#64748b",marginBottom:10,lineHeight:1.4}}>Umbral {cfg.bono.umbralCero}% · meta plena {cfg.bono.umbralPleno}% · tope por crítico {cfg.bono.capCritico}%. El líder valida el % y los críticos; las faltas injustificadas sugieren un descuento (editable).</div>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {filas.map(function(f){
+          var sem=colorSemaforo(f.cumplVal,cfg.semaforo); var blo=f.ci.bloqueado;
+          return (
+            <div key={f.c.id} style={{background:"#fff",border:"1px solid "+(blo?"#86efac":"#e2e8f0"),borderRadius:14,padding:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <div style={{flex:1}}><div style={{fontWeight:800,fontSize:14}}>{f.c.persona||"(Sin asignar)"}</div><div style={{fontSize:11,color:"#64748b"}}>{f.c.cargo}</div></div>
+                {blo && <span style={{fontSize:10,fontWeight:800,color:"#15803d"}}>🔒 Cerrado</span>}
+                {blo && (f.ci.aceptado ? <span style={{fontSize:10,fontWeight:800,color:"#0369a1"}}>✍️ Aceptado {(f.ci.aceptado.fecha||"").slice(0,10)}</span> : <span style={{fontSize:10,fontWeight:700,color:"#b45309"}}>⏳ Sin aceptar</span>)}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontSize:12}}>
+                <div style={{background:"#f8fafc",borderRadius:9,padding:"7px 10px"}}>
+                  <div style={{color:"#94a3b8",fontSize:10,fontWeight:700}}>AVANCE AUTOMÁTICO</div>
+                  <div style={{fontWeight:800,fontSize:16,color:colorSemaforo(f.res.pct,cfg.semaforo).c}}>{f.res.pct}%</div>
+                  <div style={{fontSize:10,color:"#64748b"}}>{f.res.dh} días háb.{f.res.injust>0?" · ⚠ "+f.res.injust+" injust.":""}</div>
+                </div>
+                <div style={{background:sem.bg,borderRadius:9,padding:"7px 10px"}}>
+                  <div style={{color:"#94a3b8",fontSize:10,fontWeight:700}}>% VALIDADO (LÍDER)</div>
+                  <input type="number" min="0" max="100" value={f.ci.cumplValidado!==undefined?f.ci.cumplValidado:""} disabled={blo} placeholder={f.res.pct} onChange={function(e){setCierre(f.c.id,{cumplValidado:e.target.value});}} style={{width:66,padding:"3px 6px",borderRadius:6,border:"1.5px solid "+sem.c,fontWeight:800,fontSize:15,color:sem.c}}/>
+                  <span style={{fontSize:12,color:sem.c,fontWeight:800}}> % {sem.e}</span>
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginTop:9,background:f.criticosOk?"#f0fdf4":"#fef2f2",borderRadius:9,padding:"6px 10px"}}>
+                <span style={{fontSize:11,fontWeight:700,color:f.criticosOk?"#15803d":"#b91c1c"}}>⚠ KPIs críticos {f.criticosOk?"cumplidos":"en rojo (topan al "+cfg.bono.capCritico+"%)"}</span>
+                <button disabled={blo} onClick={function(){setCierre(f.c.id,{criticosOk:!f.criticosOk});}} style={{padding:"4px 12px",borderRadius:20,border:"1.5px solid "+(f.criticosOk?"#86efac":"#fca5a5"),background:"#fff",color:f.criticosOk?"#15803d":"#dc2626",fontWeight:800,fontSize:11,cursor:blo?"not-allowed":"pointer"}}>{f.criticosOk?"Cumplidos ✓":"En rojo ✗"}</button>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:9,flexWrap:"wrap"}}>
+                <span style={{fontSize:11,color:"#64748b",fontWeight:700}}>Monto base $:</span>
+                <input type="number" value={f.base||""} disabled={blo} onChange={function(e){setMontoBase(f.c.id,e.target.value);}} style={{width:120,padding:"5px 8px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:13,fontWeight:700}}/>
+                <span style={{fontSize:11,color:"#64748b",fontWeight:700,marginLeft:6}}>Descuento faltas $:</span>
+                <input type="number" value={f.ci.descuento!==undefined?f.ci.descuento:""} disabled={blo} placeholder={f.descSugerido} onChange={function(e){setCierre(f.c.id,{descuento:e.target.value});}} style={{width:110,padding:"5px 8px",borderRadius:7,border:"1.5px solid "+(f.desc>0?"#fca5a5":"#e2e8f0"),fontSize:13,fontWeight:700,color:f.desc>0?"#b91c1c":"#1e293b"}}/>
+                {f.res.injust>0 && <span style={{fontSize:10,color:"#b91c1c"}}>sugerido {fmtCOP(f.descSugerido)} ({f.res.injust} día/s)</span>}
+              </div>
+              <div style={{display:"flex",alignItems:"flex-end",justifyContent:"space-between",marginTop:10}}>
+                <div style={{fontSize:11,color:"#94a3b8"}}>Bono {f.bonoPct}% {f.desc>0?" − desc "+fmtCOP(f.desc):""}</div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:10,color:"#94a3b8",fontWeight:700}}>BONO A LIQUIDAR</div><div style={{fontSize:20,fontWeight:900,color:"#10b981"}}>{fmtCOP(f.bonoFinal)}</div></div>
+              </div>
+              <button onClick={function(){ setCierre(f.c.id,{bloqueado:!blo, cumplValidado:f.cumplVal, criticosOk:f.criticosOk, descuento:f.desc, bonoPct:f.bonoPct, bono:f.bonoFinal, fecha:new Date().toISOString()}); }} style={{marginTop:10,width:"100%",padding:"8px",borderRadius:9,border:"none",background:blo?"#fef2f2":"#1e293b",color:blo?"#b91c1c":"#fff",fontWeight:800,fontSize:12,cursor:"pointer"}}>{blo?"🔓 Reabrir mes":"🔒 Cerrar y validar mes"}</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---- Panel Calendario ----
+function PanelCalendario(props){
+  var cfg=props.config;
+  var [fFest,setFFest]=useState(hoyStr());
+  var [cid,setCid]=useState(cfg.cargos[0].id);
+  var [fAus,setFAus]=useState(hoyStr());
+  var [tipo,setTipo]=useState("justificada");
+  var [motivo,setMotivo]=useState("");
+  function addFestivo(){ if(!fFest) return; var nf=Object.assign({},cfg.festivos||{}); nf[fFest]=true; props.guardar(Object.assign({},cfg,{festivos:nf})); }
+  function delFestivo(f){ var nf=Object.assign({},cfg.festivos||{}); delete nf[f]; props.guardar(Object.assign({},cfg,{festivos:nf})); }
+  var [fSab,setFSab]=useState(hoyStr());
+  function esSabado(f){ var p=f.split("-"); return new Date(+p[0],+p[1]-1,+p[2]).getDay()===6; }
+  function addSabado(){ if(!fSab) return; if(!esSabado(fSab)){ alert("Esa fecha no es un sábado. Elige un sábado."); return; } var ns=Object.assign({},cfg.sabadosLaborales||{}); ns[fSab]=true; props.guardar(Object.assign({},cfg,{sabadosLaborales:ns})); }
+  function delSabado(f){ var ns=Object.assign({},cfg.sabadosLaborales||{}); delete ns[f]; props.guardar(Object.assign({},cfg,{sabadosLaborales:ns})); }
+  function addAusencia(){ if(!fAus) return; var na=JSON.parse(JSON.stringify(cfg.ausencias||{})); if(!na[cid])na[cid]={}; na[cid][fAus]={tipo:tipo,motivo:motivo}; props.guardar(Object.assign({},cfg,{ausencias:na})); setMotivo(""); }
+  function delAusencia(ci,f){ var na=JSON.parse(JSON.stringify(cfg.ausencias||{})); if(na[ci]) delete na[ci][f]; props.guardar(Object.assign({},cfg,{ausencias:na})); }
+  var festivos=Object.keys(cfg.festivos||{}).sort();
+  var inp={padding:"7px 9px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:13};
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:14}}>
+        <div style={{fontSize:13,fontWeight:800,marginBottom:4}}>📅 Días festivos (todo el equipo)</div>
+        <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>No cuentan como día hábil para nadie.</div>
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          <input type="date" value={fFest} onChange={function(e){setFFest(e.target.value);}} style={Object.assign({flex:1},inp)}/>
+          <button onClick={addFestivo} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,cursor:"pointer"}}>+ Agregar</button>
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {festivos.length===0 && <span style={{fontSize:12,color:"#94a3b8"}}>Sin festivos cargados.</span>}
+          {festivos.map(function(f){ return <span key={f} style={{display:"inline-flex",alignItems:"center",gap:5,background:"#eff6ff",color:"#1d4ed8",borderRadius:20,padding:"4px 10px",fontSize:12,fontWeight:700}}>{f} <span onClick={function(){delFestivo(f);}} style={{cursor:"pointer",color:"#ef4444",fontWeight:900}}>✕</span></span>; })}
+        </div>
+      </div>
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:14}}>
+        <div style={{fontSize:13,fontWeight:800,marginBottom:4}}>🗓️ Sábados que SÍ se trabajan</div>
+        <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>Marca aquí los sábados laborales del mes. Esos sí cuentan como día hábil (casilla + denominador). Los domingos nunca cuentan.</div>
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          <input type="date" value={fSab} onChange={function(e){setFSab(e.target.value);}} style={Object.assign({flex:1},inp)}/>
+          <button onClick={addSabado} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,cursor:"pointer"}}>+ Agregar</button>
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {Object.keys(cfg.sabadosLaborales||{}).length===0 && <span style={{fontSize:12,color:"#94a3b8"}}>Sin sábados laborales cargados.</span>}
+          {Object.keys(cfg.sabadosLaborales||{}).sort().map(function(f){ return <span key={f} style={{display:"inline-flex",alignItems:"center",gap:5,background:"#f0fdf4",color:"#15803d",borderRadius:20,padding:"4px 10px",fontSize:12,fontWeight:700}}>{f} <span onClick={function(){delSabado(f);}} style={{cursor:"pointer",color:"#ef4444",fontWeight:900}}>✕</span></span>; })}
+        </div>
+      </div>
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:14}}>
+        <div style={{fontSize:13,fontWeight:800,marginBottom:4}}>🏥 Ausencias por persona</div>
+        <div style={{fontSize:11,color:"#64748b",marginBottom:10}}><b>Justificada</b> (incapacidad, vacaciones, permiso) → no cuenta. <b>Injustificada</b> → cuenta como día no cumplido y sugiere descuento del bono.</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+          <select value={cid} onChange={function(e){setCid(e.target.value);}} style={inp}>{cfg.cargos.map(function(c){return <option key={c.id} value={c.id}>{c.persona||c.cargo}</option>;})}</select>
+          <input type="date" value={fAus} onChange={function(e){setFAus(e.target.value);}} style={inp}/>
+          <select value={tipo} onChange={function(e){setTipo(e.target.value);}} style={inp}><option value="justificada">Justificada</option><option value="injustificada">Injustificada</option></select>
+          <input value={motivo} onChange={function(e){setMotivo(e.target.value);}} placeholder="Motivo (opcional)" style={Object.assign({flex:1,minWidth:120},inp)}/>
+          <button onClick={addAusencia} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,cursor:"pointer"}}>+ Agregar</button>
+        </div>
+        {cfg.cargos.map(function(c){
+          var aus=(cfg.ausencias&&cfg.ausencias[c.id])||{}; var ks=Object.keys(aus).sort();
+          if(ks.length===0) return null;
+          return (
+            <div key={c.id} style={{marginTop:8}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#475569",marginBottom:4}}>{c.persona||c.cargo}</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {ks.map(function(f){ var a=aus[f]; var just=a.tipo==="justificada"; return <span key={f} style={{display:"inline-flex",alignItems:"center",gap:5,background:just?"#f0fdf4":"#fef2f2",color:just?"#15803d":"#b91c1c",borderRadius:20,padding:"4px 10px",fontSize:11,fontWeight:700}}>{f} · {a.tipo}{a.motivo?" ("+a.motivo+")":""} <span onClick={function(){delAusencia(c.id,f);}} style={{cursor:"pointer",color:"#ef4444",fontWeight:900}}>✕</span></span>; })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---- Panel Cargos ----
+function PanelCargos(props){
+  var cfg=props.config;
+  var [nuevoCargo,setNuevoCargo]=useState("");
+  var [nuevoReporta,setNuevoReporta]=useState("Coordinadora Contable y Financiera");
+  var [confirmDel,setConfirmDel]=useState(null);
+  function updCargo(id,campo,val){ props.guardar(Object.assign({},cfg,{cargos:cfg.cargos.map(function(c){return c.id===id?Object.assign({},c,(function(){var o={};o[campo]=val;return o;})()):c;})})); }
+  function crearCargo(){
+    var nom=nuevoCargo.trim(); if(!nom) return;
+    var id = "cargo_"+Date.now();
+    var nc=cfg.cargos.concat([{id:id, cargo:nom, persona:"", reporta:nuevoReporta||"", tareas:[]}]);
+    props.guardar(Object.assign({},cfg,{cargos:nc}));
+    setNuevoCargo("");
+  }
+  function eliminarCargo(id){ props.guardar(Object.assign({},cfg,{cargos:cfg.cargos.filter(function(c){return c.id!==id;})})); setConfirmDel(null); }
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+      <div style={{fontSize:12,color:"#64748b"}}>Asigna el responsable de cada cargo (vacío = sin asignar), edita el nombre del cargo, o crea/elimina cargos si el equipo crece.</div>
+      {cfg.cargos.map(function(c){ return (
+        <div key={c.id} style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:12}}>
+          <div style={{display:"flex",gap:6,marginBottom:6}}>
+            <input value={c.cargo} onChange={function(e){updCargo(c.id,"cargo",e.target.value);}} style={{flex:1,padding:"7px 9px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:13,fontWeight:800}}/>
+            {confirmDel===c.id
+              ? <span style={{display:"flex",gap:4,alignItems:"center"}}><button onClick={function(){eliminarCargo(c.id);}} style={{padding:"5px 9px",borderRadius:7,border:"none",background:"#ef4444",color:"#fff",fontWeight:700,fontSize:11,cursor:"pointer"}}>Sí, borrar</button><button onClick={function(){setConfirmDel(null);}} style={{padding:"5px 9px",borderRadius:7,border:"1.5px solid #e2e8f0",background:"#fff",fontWeight:700,fontSize:11,cursor:"pointer"}}>No</button></span>
+              : <button onClick={function(){setConfirmDel(c.id);}} title="Eliminar cargo" style={{padding:"5px 10px",borderRadius:7,border:"none",background:"#fef2f2",color:"#ef4444",fontWeight:700,cursor:"pointer"}}>✕</button>}
+          </div>
+          <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:7,flexWrap:"wrap"}}>
+            <span style={{fontSize:11,color:"#94a3b8"}}>Reporta a:</span>
+            <input value={c.reporta||""} onChange={function(e){updCargo(c.id,"reporta",e.target.value);}} style={{flex:1,minWidth:150,padding:"5px 8px",borderRadius:7,border:"1.5px solid #eef2f6",fontSize:11}}/>
+            <span style={{fontSize:11,color:"#94a3b8"}}>· {c.tareas.length} tareas</span>
+          </div>
+          <input value={c.persona||""} onChange={function(e){updCargo(c.id,"persona",e.target.value);}} placeholder="Nombre del responsable" style={{width:"100%",boxSizing:"border-box",padding:"8px 10px",borderRadius:9,border:"1.5px solid #e2e8f0",fontSize:13,fontWeight:600}}/>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:7}}>
+            <span style={{fontSize:11,color:"#0369a1",fontWeight:700}}>🔐 Contraseña:</span>
+            <input value={(cfg.passwords&&cfg.passwords[c.id])||""} onChange={function(e){ var np=Object.assign({},cfg.passwords||{}); if(e.target.value) np[c.id]=e.target.value; else delete np[c.id]; props.guardar(Object.assign({},cfg,{passwords:np})); }} placeholder="(sin clave — entra directo)" style={{flex:1,padding:"6px 9px",borderRadius:8,border:"1.5px solid #bae6fd",fontSize:12,background:"#f8fbff"}}/>
+          </div>
+        </div>
+      ); })}
+      <div style={{background:"#f7fdf0",border:"1.5px dashed #8DC63F",borderRadius:12,padding:12}}>
+        <div style={{fontSize:12,fontWeight:800,color:"#3d6b10",marginBottom:7}}>➕ Crear cargo nuevo</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <input value={nuevoCargo} onChange={function(e){setNuevoCargo(e.target.value);}} placeholder="Nombre del cargo (ej: Auxiliar Contable)" style={{flex:1,minWidth:170,padding:"8px 10px",borderRadius:9,border:"1.5px solid #cbd5e1",fontSize:13}}/>
+          <input value={nuevoReporta} onChange={function(e){setNuevoReporta(e.target.value);}} placeholder="Reporta a…" style={{flex:1,minWidth:150,padding:"8px 10px",borderRadius:9,border:"1.5px solid #cbd5e1",fontSize:13}}/>
+          <button onClick={crearCargo} style={{padding:"8px 16px",borderRadius:9,border:"none",background:"#8DC63F",color:"#fff",fontWeight:800,cursor:"pointer"}}>Crear</button>
+        </div>
+        <div style={{fontSize:10.5,color:"#64748b",marginTop:6}}>Se crea sin tareas; luego agrégalas en 📋 Tareas/KPIs.</div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Panel Tareas / KPIs (con NOTA) ----
+function PanelTareas(props){
+  var cfg=props.config; var [cid,setCid]=useState(cfg.cargos[0].id);
+  var cargo=cfg.cargos.find(function(c){return c.id===cid;});
+  function upd(idx,campo,val){ props.guardar(Object.assign({},cfg,{cargos:cfg.cargos.map(function(c){ if(c.id!==cid)return c; var nt=c.tareas.slice(); nt[idx]=Object.assign({},nt[idx]); nt[idx][campo]=val; return Object.assign({},c,{tareas:nt}); })})); }
+  function del(idx){ props.guardar(Object.assign({},cfg,{cargos:cfg.cargos.map(function(c){return c.id!==cid?c:Object.assign({},c,{tareas:c.tareas.filter(function(_,i){return i!==idx;})});})})); }
+  function add(){ props.guardar(Object.assign({},cfg,{cargos:cfg.cargos.map(function(c){return c.id!==cid?c:Object.assign({},c,{tareas:c.tareas.concat([T("—","Nueva tarea","100%","Diario")])});})})); }
+  function repartir(){ var n=cargo.tareas.length; if(!n)return; var base=Math.floor(100/n), resto=100-base*n; var nt=cargo.tareas.map(function(t,i){return Object.assign({},t,{peso: base+(i<resto?1:0)});}); props.guardar(Object.assign({},cfg,{cargos:cfg.cargos.map(function(c){return c.id!==cid?c:Object.assign({},c,{tareas:nt});})})); }
+  var sumaPct = cargo.tareas.reduce(function(a,t){return a+(Number(t.peso)||0);},0);
+  var ok100 = Math.abs(sumaPct-100)<0.01;
+  return (
+    <div>
+      <select value={cid} onChange={function(e){setCid(e.target.value);}} style={{width:"100%",padding:"9px",borderRadius:10,border:"1.5px solid #e2e8f0",fontWeight:700,fontSize:13,marginBottom:10}}>{cfg.cargos.map(function(c){return <option key={c.id} value={c.id}>{c.cargo}{c.persona?" — "+c.persona:""}</option>;})}</select>
+      <div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:10,padding:"10px 12px",marginBottom:12}}>
+        <div style={{fontSize:11.5,color:"#0369a1",lineHeight:1.4,marginBottom:8}}>💯 Escribe cuánto <b>% del total</b> vale cada tarea (las más difíciles valen más). Entre todas deben sumar <b>100%</b>.</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:13,fontWeight:800,color:ok100?"#15803d":"#b91c1c"}}>Suma asignada: {Math.round(sumaPct*10)/10}%</span>
+          {!ok100 && <span style={{fontSize:12,fontWeight:700,color:"#b91c1c"}}>{sumaPct<100?"⚠ falta "+(Math.round((100-sumaPct)*10)/10)+"%":"⚠ te pasaste "+(Math.round((sumaPct-100)*10)/10)+"%"}</span>}
+          {ok100 && <span style={{fontSize:12,fontWeight:700,color:"#15803d"}}>✓ correcto</span>}
+          <button onClick={repartir} style={{marginLeft:"auto",padding:"5px 12px",borderRadius:8,border:"1.5px solid #bae6fd",background:"#fff",color:"#0369a1",fontWeight:700,fontSize:11,cursor:"pointer"}}>Repartir equitativamente</button>
+        </div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {cargo.tareas.map(function(t,idx){ return (
+          <div key={idx} style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:11,padding:10}}>
+            <div style={{display:"flex",gap:6,marginBottom:6}}>
+              <input value={t.cod} onChange={function(e){upd(idx,"cod",e.target.value);}} style={{width:68,padding:"5px 7px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:11,fontWeight:700}}/>
+              <input value={t.nom} onChange={function(e){upd(idx,"nom",e.target.value);}} style={{flex:1,padding:"5px 7px",borderRadius:7,border:"1.5px solid #e2e8f0",fontSize:12}}/>
+              <button onClick={function(){del(idx);}} style={{padding:"3px 9px",borderRadius:7,border:"none",background:"#fef2f2",color:"#ef4444",fontWeight:700,cursor:"pointer"}}>✕</button>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:6}}>
+              <select value={t.frec} onChange={function(e){upd(idx,"frec",e.target.value);}} style={{padding:"4px 6px",borderRadius:6,border:"1.5px solid #e2e8f0",fontSize:11}}>{FRECUENCIAS.map(function(f){return <option key={f} value={f}>{f}</option>;})}</select>
+              <span style={{fontSize:11,color:"#64748b"}}>Meta:</span><input value={t.meta} onChange={function(e){upd(idx,"meta",e.target.value);}} style={{width:100,padding:"4px 6px",borderRadius:6,border:"1.5px solid #e2e8f0",fontSize:11}}/>
+              <span style={{fontSize:11,color:"#64748b"}}>Campo:</span><input value={t.campo||""} onChange={function(e){upd(idx,"campo",e.target.value||null);}} placeholder="(ninguno)" style={{width:100,padding:"4px 6px",borderRadius:6,border:"1.5px solid #e2e8f0",fontSize:11}}/>
+              <label style={{fontSize:11,fontWeight:700,color:t.crit?"#b91c1c":"#64748b",display:"flex",alignItems:"center",gap:3,cursor:"pointer"}}><input type="checkbox" checked={!!t.crit} onChange={function(e){upd(idx,"crit",e.target.checked);}}/> ⚠ Crítico</label>
+              <span style={{fontSize:11,color:"#0369a1",fontWeight:700}}>💯 Vale:</span>
+              <input type="number" min="0" max="100" step="0.5" value={t.peso!==undefined?t.peso:1} onChange={function(e){upd(idx,"peso",Number(e.target.value)||0);}} style={{width:56,padding:"4px 6px",borderRadius:6,border:"1.5px solid #bae6fd",fontSize:12,fontWeight:800,textAlign:"right"}}/>
+              <span style={{fontSize:11,fontWeight:800,color:"#0369a1"}}>% del total</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:11,color:"#1d4ed8",fontWeight:700}}>📌 Nota:</span>
+              <input value={t.nota||""} onChange={function(e){upd(idx,"nota",e.target.value);}} placeholder="Recordatorio visible (ej: entregar antes del día 5)" style={{flex:1,padding:"5px 8px",borderRadius:7,border:"1.5px solid #bfdbfe",fontSize:12,background:"#f8fbff"}}/>
+            </div>
+          </div>
+        ); })}
+      </div>
+      <button onClick={add} style={{marginTop:12,width:"100%",padding:"9px",borderRadius:10,border:"1.5px dashed #8DC63F",background:"#f7fdf0",color:"#3d6b10",fontWeight:800,cursor:"pointer"}}>+ Agregar tarea</button>
+    </div>
+  );
+}
+
+// ---- Panel Reglas ----
+function PanelConfig(props){
+  var cfg=props.config;
+  function setSem(k,v){ props.guardar(Object.assign({},cfg,{semaforo:Object.assign({},cfg.semaforo,(function(){var o={};o[k]=Number(v);return o;})())})); }
+  function setBono(k,v){ props.guardar(Object.assign({},cfg,{bono:Object.assign({},cfg.bono,(function(){var o={};o[k]=Number(v);return o;})())})); }
+  function setAdminPwd(v){ var np=Object.assign({},cfg.passwords||{}); if(v) np.__admin__=v; else delete np.__admin__; props.guardar(Object.assign({},cfg,{passwords:np})); }
+  function setHorario(k,v){ var h=Object.assign({inicio:"08:00",fin:"18:00"},cfg.horario||{}); h[k]=v; props.guardar(Object.assign({},cfg,{horario:h})); }
+  var hCfg=horarioCfg(cfg);
+  var fileRef=useRef(null);
+  function exportarConfig(){ var blob=new Blob([JSON.stringify(cfg,null,2)],{type:"application/json"}); var url=URL.createObjectURL(blob); var a=document.createElement("a"); a.href=url; a.download="Respaldo_Bitacora_Contable_"+hoyStr()+".json"; document.body.appendChild(a); a.click(); setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},150); }
+  function importarConfig(e){ var f=e.target.files&&e.target.files[0]; if(!f) return; var r=new FileReader(); r.onload=function(){ try{ var obj=JSON.parse(r.result); if(!obj.cargos) throw 0; if(confirm("Esto reemplazará TODA la configuración actual (cargos, tareas, pesos, calendario, contraseñas). ¿Continuar?")){ props.guardar(obj); alert("Configuración restaurada."); } }catch(err){ alert("Archivo inválido."); } e.target.value=""; }; r.readAsText(f); }
+  var row={display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 0",borderBottom:"1px solid #f1f5f9"};
+  var inp={width:80,padding:"6px 8px",borderRadius:7,border:"1.5px solid #e2e8f0",fontWeight:700,textAlign:"right"};
+  var inpTxt={flex:1,padding:"7px 9px",borderRadius:8,border:"1.5px solid #e2e8f0",fontSize:13};
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:16}}>
+        <div style={{fontSize:13,fontWeight:800,marginBottom:6}}>🚦 Umbrales del semáforo</div>
+        <div style={row}><span style={{fontSize:13}}>🟢 Verde desde (%)</span><input style={inp} type="number" value={cfg.semaforo.verde} onChange={function(e){setSem("verde",e.target.value);}}/></div>
+        <div style={row}><span style={{fontSize:13}}>🟡 Amarillo desde (%)</span><input style={inp} type="number" value={cfg.semaforo.amarillo} onChange={function(e){setSem("amarillo",e.target.value);}}/></div>
+        <div style={{fontSize:13,fontWeight:800,margin:"16px 0 6px"}}>💰 Reglas de bonificación</div>
+        <div style={row}><span style={{fontSize:13}}>Umbral de entrada (bono 0 por debajo)</span><input style={inp} type="number" value={cfg.bono.umbralCero} onChange={function(e){setBono("umbralCero",e.target.value);}}/></div>
+        <div style={row}><span style={{fontSize:13}}>Meta plena (bono 100% desde)</span><input style={inp} type="number" value={cfg.bono.umbralPleno} onChange={function(e){setBono("umbralPleno",e.target.value);}}/></div>
+        <div style={row}><span style={{fontSize:13}}>Tope si hay crítico en rojo (%)</span><input style={inp} type="number" value={cfg.bono.capCritico} onChange={function(e){setBono("capCritico",e.target.value);}}/></div>
+        <div style={{fontSize:11,color:"#64748b",marginTop:12,lineHeight:1.4}}>Entre el umbral y la meta plena el bono es <b>proporcional</b>. El descuento por faltas injustificadas se aplica por persona en 💰 Bonificación.</div>
+      </div>
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:16}}>
+        <div style={{fontSize:13,fontWeight:800,marginBottom:4}}>🕐 Horario de marcación</div>
+        <div style={{fontSize:11,color:"#64748b",marginBottom:10,lineHeight:1.4}}>Rango en que los auxiliares pueden marcar sus tareas del día. Fuera de ese horario (o en días pasados) no pueden marcar, y lo no marcado queda como no realizado. El administrador puede corregir cualquier día en ✏️ Corregir.</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:12,color:"#475569",fontWeight:700}}>Desde</span>
+          <input type="time" value={hCfg.inicio} onChange={function(e){setHorario("inicio",e.target.value);}} style={{padding:"7px 9px",borderRadius:8,border:"1.5px solid #e2e8f0",fontWeight:700,fontSize:13}}/>
+          <span style={{fontSize:12,color:"#475569",fontWeight:700}}>hasta</span>
+          <input type="time" value={hCfg.fin} onChange={function(e){setHorario("fin",e.target.value);}} style={{padding:"7px 9px",borderRadius:8,border:"1.5px solid #e2e8f0",fontWeight:700,fontSize:13}}/>
+        </div>
+      </div>
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:16}}>
+        <div style={{fontSize:13,fontWeight:800,marginBottom:8}}>🔐 Seguridad de administración</div>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}><span style={{fontSize:12,color:"#475569",fontWeight:700,width:150}}>Contraseña admin</span><input value={(cfg.passwords&&cfg.passwords.__admin__)||""} onChange={function(e){setAdminPwd(e.target.value);}} placeholder={ADMIN_PWD_DEFAULT} style={inpTxt}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:12,color:"#475569",fontWeight:700,width:150}}>Código de recuperación</span><input value={cfg.recoveryCode||""} onChange={function(e){props.guardar(Object.assign({},cfg,{recoveryCode:e.target.value}));}} placeholder={RECOVERY_DEFAULT} style={inpTxt}/></div>
+        <div style={{fontSize:10.5,color:"#64748b",marginTop:8,lineHeight:1.4}}>⚠️ Guarda el <b>código de recuperación</b> en un lugar seguro. Si olvidas la contraseña, con ese código la restableces desde la pantalla de acceso ("¿Olvidaste la contraseña?").</div>
+      </div>
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:14,padding:16}}>
+        <div style={{fontSize:13,fontWeight:800,marginBottom:4}}>💾 Respaldo de configuración</div>
+        <div style={{fontSize:11,color:"#64748b",marginBottom:10,lineHeight:1.4}}>Descarga o restaura toda la configuración (cargos, tareas, pesos, calendario, contraseñas). No incluye los registros diarios.</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={exportarConfig} style={{flex:1,minWidth:140,padding:"9px",borderRadius:9,border:"none",background:"#0ea5e9",color:"#fff",fontWeight:800,cursor:"pointer"}}>⬇️ Exportar respaldo</button>
+          <button onClick={function(){fileRef.current&&fileRef.current.click();}} style={{flex:1,minWidth:140,padding:"9px",borderRadius:9,border:"1.5px solid #0ea5e9",background:"#fff",color:"#0369a1",fontWeight:800,cursor:"pointer"}}>⬆️ Importar respaldo</button>
+          <input ref={fileRef} type="file" accept="application/json,.json" onChange={importarConfig} style={{display:"none"}}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===================== EXPORTAR EXCEL (formulado) =====================
+function exportarExcel(cfg, registros, cierres, ym){
+  var wb=new ExcelJS.Workbook();
+  var colE={ok:"FF16A34A",proc:"FFB45309",pend:"FFB91C1C",na:"FF64748B","":"FF94A3B8"};
+  var filE={ok:"FFDCFCE7",proc:"FFFEF9C3",pend:"FFFEE2E2",na:"FFF1F5F9","":"FFF8FAFC"};
+  var labE={ok:"Completado",proc:"En proceso",pend:"Pendiente",na:"N/A","":"Sin marcar"};
+
+  // Una hoja por cargo, con base de medición y % con FÓRMULA
+  var hojaRef={};
+  cfg.cargos.forEach(function(c){
+    var nombreHoja=(c.persona||c.cargo).slice(0,28).replace(/[\\\/\?\*\[\]:]/g," ");
+    hojaRef[c.id]=nombreHoja;
+    var ws=wb.addWorksheet(nombreHoja);
+    ws.addRow([c.cargo.toUpperCase()]); ws.getRow(1).font={bold:true,size:13};
+    ws.addRow(["Responsable: "+(c.persona||"(sin asignar)")+"  ·  Reporta a: "+c.reporta+"  ·  Período: "+nombreMes(ym)]);
+    ws.addRow(["Días hábiles del mes:", diasHabiles(ym,c.id,cfg), "Faltas injustificadas:", diasInjustificados(ym,c.id,cfg)]);
+    ws.addRow([]);
+    var h=ws.addRow(["Frecuencia","Cód. KPI","Tarea / Actividad","Meta","Cumplido","Base","% Cumpl.","Peso","Puntos","Crítico","Valor","Observaciones"]);
+    h.font={bold:true}; h.eachCell(function(cell){ cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF334155"}}; cell.font={bold:true,color:{argb:"FFFFFFFF"}}; });
+    var reg=registros[c.id]||{};
+    var primera=ws.rowCount+1, ultima=primera-1;
+    c.tareas.forEach(function(t){
+      var r=tareaPct(t,reg,ym,cfg,c.id);
+      var valPrimerSlot="";
+      // tomar un valor representativo si existe (diario: hoy; periodo: primer slot)
+      var rr=ws.addRow([t.frec, t.cod, t.nom, t.meta, r.hechos, r.base, "", (t.peso||1), "", t.crit?"⚠":"", valPrimerSlot, ""]);
+      var rn=rr.number;
+      // % Cumpl = Cumplido/Base (fórmula real), formateado %
+      rr.getCell(7).value={formula:"IF(F"+rn+"=0,0,E"+rn+"/F"+rn+")"};
+      rr.getCell(7).numFmt="0%";
+      // Puntos = %Cumpl * Peso
+      rr.getCell(9).value={formula:"G"+rn+"*H"+rn};
+      rr.getCell(9).numFmt="0.00";
+      ultima=rn;
+    });
+    // Fila TOTAL con fórmula ponderada
+    var tot=ws.addRow(["","","CUMPLIMIENTO TOTAL","","","","", {formula:"SUM(H"+primera+":H"+ultima+")"}, {formula:"IF(H"+(ultima+1)+"=0,0,SUM(I"+primera+":I"+ultima+")/H"+(ultima+1)+")"},"","",""]);
+    tot.font={bold:true}; tot.getCell(9).numFmt="0%"; tot.getCell(3).alignment={horizontal:"right"};
+    tot.eachCell(function(cell){ cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFE2E8F0"}}; });
+    ws.getColumn(1).width=12; ws.getColumn(2).width=10; ws.getColumn(3).width=46; ws.getColumn(4).width=14; ws.getColumn(5).width=10; ws.getColumn(6).width=8; ws.getColumn(7).width=10; ws.getColumn(8).width=7; ws.getColumn(9).width=9; ws.getColumn(10).width=8; ws.getColumn(11).width=16; ws.getColumn(12).width=28;
+  });
+
+  // Hoja Resumen + Bonificación (formulada, enlazada a cada hoja)
+  var rs=wb.addWorksheet("📊 Resumen y Bono");
+  rs.addRow(["BITÁCORA CONTABLE — RESUMEN Y BONIFICACIÓN"]); rs.getRow(1).font={bold:true,size:14};
+  rs.addRow(["ASPM SAS  ·  Período: "+nombreMes(ym)]);
+  rs.addRow(["Reglas:","Umbral "+cfg.bono.umbralCero+"%","Meta plena "+cfg.bono.umbralPleno+"%","Tope crítico "+cfg.bono.capCritico+"%"]);
+  rs.addRow([]);
+  var H=rs.addRow(["Cargo","Responsable","% Cumpl. (auto)","% Validado líder","Semáforo","Críticos","Bono %","Monto base","Descuento faltas","Bono a liquidar","Estado"]);
+  H.font={bold:true}; H.eachCell(function(c){ c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF1A2E0A"}}; c.font={bold:true,color:{argb:"FFFFFFFF"}}; });
+  cfg.cargos.forEach(function(c){
+    var reg=registros[c.id]||{}; var res=calcCumplimientoMes(c,reg,ym,cfg);
+    var ci=(cierres[ym]&&cierres[ym][c.id])||{};
+    var cumplVal=(ci.cumplValidado!==undefined&&ci.cumplValidado!=="")?Number(ci.cumplValidado):res.pct;
+    var criticosOk=(ci.criticosOk!==undefined)?!!ci.criticosOk:!res.criticoRojo;
+    var bonoPct=calcBono(cumplVal,!criticosOk,cfg.bono);
+    var base=(cfg.bono.montoBase&&cfg.bono.montoBase[c.id])||0;
+    var diasLab=diasLaboralesMes(ym,cfg);
+    var desc=(ci.descuento!==undefined&&ci.descuento!=="")?Number(ci.descuento):(diasLab>0?Math.round(base/diasLab*res.injust):0);
+    var sem=colorSemaforo(cumplVal,cfg.semaforo);
+    var autoRef = "'"+hojaRef[c.id]+"'!I"+10000; // referencia no fiable; mejor dejar auto como valor
+    var r=rs.addRow([c.cargo, c.persona||"(sin asignar)", res.pct/100, cumplVal/100, sem.txt, criticosOk?"OK":"EN ROJO", bonoPct/100, base, desc, "", ci.bloqueado?"Cerrado":"Abierto"]);
+    var rn=r.number;
+    r.getCell(3).numFmt="0%"; r.getCell(4).numFmt="0%"; r.getCell(7).numFmt="0%";
+    r.getCell(8).numFmt="#,##0"; r.getCell(9).numFmt="#,##0";
+    // Bono a liquidar = Monto base * Bono% - Descuento  (fórmula real y auditable)
+    r.getCell(10).value={formula:"MAX(0, H"+rn+"*G"+rn+" - I"+rn+")"}; r.getCell(10).numFmt="#,##0";
+    var sc = sem.txt==="Verde"?"FFDCFCE7":sem.txt==="Amarillo"?"FFFEF9C3":"FFFEE2E2";
+    r.getCell(5).fill={type:"pattern",pattern:"solid",fgColor:{argb:sc}};
+  });
+  rs.getColumn(1).width=32; rs.getColumn(2).width=22; [3,4,5,6,7,8,9,10,11].forEach(function(i){rs.getColumn(i).width=15;});
+
+  wb.xlsx.writeBuffer().then(function(buf){
+    var blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    var url=URL.createObjectURL(blob); var a=document.createElement("a"); a.href=url; a.download="Bitacora_Contable_"+ym+".xlsx"; document.body.appendChild(a); a.click();
+    setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},150);
+  });
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
