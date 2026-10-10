@@ -38,7 +38,7 @@ const { useState, useEffect, useRef } = React;
 // ===================== CONSTANTES =====================
 const ADMIN_PWD_DEFAULT = "contable2026";
 const RECOVERY_DEFAULT = "TRIBU-CONTABLE";
-const APP_VERSION = "v2026-10-10 · EDITABLE-20"; // sello de versión — si no ves este número, estás en una versión vieja (caché)
+const APP_VERSION = "v2026-10-10 · EDITABLE-21"; // sello de versión — si no ves este número, estás en una versión vieja (caché)
 // Rutas de datos + caché local. La app arranca al instante desde localStorage y usa Firebase si está disponible
 // (así funciona también abriendo el archivo localmente, sin quedarse en "Cargando").
 const DBPATHS = { config:"edit/config", registros:"edit/registros", cierres:"edit/cierres" };
@@ -580,9 +580,19 @@ function App(){
     try{
       // Prueba de escritura real: si las reglas de Firebase bloquean, el .set falla -> indicador rojo.
       db.ref(DBPATHS.config.split("/")[0]).child("_health").set(Date.now()).then(function(){ setBadge("ok"); }).catch(function(){ setBadge("err"); });
-      rc.on("value",function(s){ var v=s.val(); if(v){ setConfig(v); lsSet("config",v); } else { rc.set(defc).catch(function(){}); } }, function(){ setBadge("err"); });
-      rr.on("value",function(s){ var v=s.val()||{}; setRegistros(v); lsSet("registros",podarRegistros(v,MESES_EN_VIVO)); }, function(){ setBadge("err"); }); // estado completo en línea; caché local solo últimos N meses
-      rx.on("value",function(s){ var v=s.val()||{}; setCierres(v); lsSet("cierres",v); }, function(){ setBadge("err"); });
+      // Si la nube tiene datos, mandan. Si la nube está VACÍA, subimos lo local (NO sembramos el default encima de tus cambios).
+      rc.on("value",function(s){ var v=s.val();
+        if(v && Object.keys(v).length){ setConfig(v); lsSet("config",v); }
+        else { var loc=lsGet("config")||defc; setConfig(loc); lsSet("config",loc); rc.set(loc).catch(function(){}); }
+      }, function(){ setBadge("err"); });
+      rr.on("value",function(s){ var v=s.val();
+        if(v && Object.keys(v).length){ setRegistros(v); lsSet("registros",podarRegistros(v,MESES_EN_VIVO)); } // estado completo en línea; caché local solo últimos N meses
+        else { var loc=lsGet("registros"); if(loc && Object.keys(loc).length){ setRegistros(loc); rr.set(loc).catch(function(){}); } }
+      }, function(){ setBadge("err"); });
+      rx.on("value",function(s){ var v=s.val();
+        if(v && Object.keys(v).length){ setCierres(v); lsSet("cierres",v); }
+        else { var loc=lsGet("cierres"); if(loc && Object.keys(loc).length){ setCierres(loc); rx.set(loc).catch(function(){}); } }
+      }, function(){ setBadge("err"); });
     }catch(e){ setBadge("err"); }
     return function(){ try{rc.off(); rr.off(); rx.off();}catch(e){} };
   },[]);
